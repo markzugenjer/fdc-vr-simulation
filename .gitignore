@@ -1,0 +1,9 @@
+node_modules/
+.DS_Store
+
+# Built by `npm run build` (GitHub Actions rebuilds them on every push)
+public/index.html
+public/vendor/
+
+android/
+*.apk

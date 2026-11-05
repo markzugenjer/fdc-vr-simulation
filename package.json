@@ -1,0 +1,19 @@
+{
+  "name": "fdc-vr-simulation",
+  "version": "0.1.0",
+  "private": true,
+  "description": "FDC Solo 3D clinic simulation (simulation.fdc.co.id) in VR for Meta Quest 3.",
+  "type": "module",
+  "scripts": {
+    "fetch": "node scripts/fetch-site.mjs",
+    "build": "node scripts/make-vr.mjs",
+    "dev": "node scripts/serve.mjs",
+    "quest:connect": "adb reverse tcp:5174 tcp:5174",
+    "pages:setup": "node -e \"require('fs').mkdirSync('.github/workflows',{recursive:true});require('fs').copyFileSync('scripts/deploy-pages.yml','.github/workflows/deploy.yml');console.log('Created .github/workflows/deploy.yml')\""
+  },
+  "dependencies": {
+    "n8ao": "1.9.4",
+    "postprocessing": "6.35.3",
+    "three": "0.160.0"
+  }
+}

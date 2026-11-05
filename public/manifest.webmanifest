@@ -1,0 +1,15 @@
+{
+  "name": "FDC Solo VR",
+  "short_name": "FDC Solo VR",
+  "description": "Walk through FDC Dental Clinic Solo and the ENCJ patient journey in VR.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#1f2a17",
+  "theme_color": "#6f8a3c",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
