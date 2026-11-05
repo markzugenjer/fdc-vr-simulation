@@ -398,7 +398,7 @@ export function setupVR(F) {
     const steps = F.patientMode; // the ENCJ stepper only in "Jadi pasien", not in "Jalan-jalan bebas"
     const data = {
       room: txt('room'),
-      door: txt('doorHint'),
+      door: txt('doorHint').replace(/^E\b/, 'A'), // the page names the keyboard key; in VR it's the A button
       phase: steps ? txt('encjPhase') : '',
       num: steps ? txt('encjNum') : '',
       act: steps ? txt('encjAct') : '',
@@ -541,7 +541,7 @@ export function setupVR(F) {
     ctx.fillText('Dental Clinic · Solo — VR', 170, H * 0.47);
     ctx.font = `500 24px ${FONT}`;
     ctx.fillStyle = '#5d6650';
-    ctx.fillText(loadingText() || 'Tombol B / Y: buka atau tutup menu', 170, H * 0.78);
+    ctx.fillText(loadingText() || `Tombol B / Y: buka atau tutup menu${fps.value ? `   ·   FPS ${fps.value} / ${targetHz}` : ''}`, 170, H * 0.78, W - 200);
     menuHead.tex.needsUpdate = true;
   }
   let menuKey = '';
@@ -589,42 +589,71 @@ export function setupVR(F) {
   }
 
   // ------------------------------------------------------------------ distance culling + auto quality
-  // Far people and small far props (plants, chairs, bottles...) are skipped when drawing. They keep
+  // Far people and small far objects (plants, chairs, bottles...) are skipped when drawing. They keep
   // moving; only the drawing stops. Uses a render layer the camera doesn't see, so it never fights
   // the simulation's own show/hide.
-  // The distances shrink automatically when the headset can't hold its refresh rate, and grow
-  // back when it has room again. Level 0 = full detail.
+  // Whole objects are hidden together (a plant with its pot, a chair with its legs, a door with its
+  // glass), so nothing is left floating. The distances shrink when the headset can't hold its refresh
+  // rate, and grow back when it has room again. Level 0 = full detail.
   const LEVELS = [
-    { people: 14, props: 26 },
-    { people: 10, props: 18 },
+    { people: 16, props: 30 },
+    { people: 12, props: 22 },
+    { people: 9, props: 16 },
     { people: 7, props: 12 },
-    { people: 5, props: 8 },
   ];
   let level = 0;
   const HIDDEN_LAYER = 5;
-  let people = [];
-  let props = [];
+  const OBJECT_MAX = 1.6; // metres: anything bigger (walls, floors, counters) is always drawn
   const _p = new THREE.Vector3();
-  const _s = new THREE.Vector3();
+  const _box = new THREE.Box3();
+  const _sph = new THREE.Sphere();
+  const sizeOf = new Map(); // object -> radius of everything under it (measured once)
+  function radius(o) {
+    let r = sizeOf.get(o);
+    if (r === undefined) {
+      _box.setFromObject(o);
+      r = _box.isEmpty() ? 0 : _box.getBoundingSphere(_sph).radius;
+      sizeOf.set(o, r);
+    }
+    return r;
+  }
+  // The "whole object" a mesh belongs to: its biggest ancestor that is still small.
+  function objectRoot(m) {
+    if (radius(m) > OBJECT_MAX) return null;
+    let root = m;
+    for (let p = m.parent; p && p !== scene; p = p.parent) {
+      if (p === rig || p === ui) return null; // VR panels and controllers are never culled
+      const r = radius(p);
+      if (r > OBJECT_MAX) {
+        // A room or the whole clinic holds many objects: stop here. But a middle-sized parent
+        // (a desk with its drawers, a bed with its frame) is one big object: never cull a piece of it.
+        if (r < 4) return null;
+        break;
+      }
+      root = p;
+    }
+    return root;
+  }
+  let units = []; // { root, meshes, person, centre (in the root's own space) }
+  const seen = new WeakSet();
+  const unitOf = new Map();
   function collect() {
-    people = [];
-    props = [];
     scene.traverse((o) => {
-      if (!o.isMesh) return;
-      if (o.isSkinnedMesh) { people.push(o); return; }
-      if (o.isInstancedMesh) return;
-      const g = o.geometry;
-      if (!g) return;
-      if (!g.boundingSphere) g.computeBoundingSphere();
-      o.getWorldScale(_s);
-      const r = g.boundingSphere.radius * Math.max(_s.x, _s.y, _s.z);
-      if (r > 0 && r < 1.2) props.push(o); // small things only: walls and floors always stay
+      if (!o.isMesh || o.isInstancedMesh || seen.has(o)) return;
+      seen.add(o);
+      const root = objectRoot(o);
+      if (!root) return;
+      let u = unitOf.get(root);
+      if (!u) {
+        _box.setFromObject(root).getBoundingSphere(_sph);
+        root.updateWorldMatrix(true, false);
+        u = { root, meshes: [], person: false, centre: root.worldToLocal(_sph.center.clone()), far: false };
+        unitOf.set(root, u);
+        units.push(u);
+      }
+      u.meshes.push(o);
+      if (o.isSkinnedMesh) u.person = true;
     });
-    // the VR panels, buttons and controllers are never culled
-    const mine = new Set();
-    rig.traverse((o) => mine.add(o));
-    ui.traverse((o) => mine.add(o));
-    props = props.filter((o) => !mine.has(o));
   }
   function hide(o, far) {
     if (far && !o.userData.vrCulled) { o.userData.vrCulled = o.layers.mask; o.layers.set(HIDDEN_LAYER); }
@@ -640,17 +669,18 @@ export function setupVR(F) {
     if (collectT <= 0) { collectT = 5; collect(); } // people and props can be added while you play
     camera.getWorldPosition(headWorld);
     const L = LEVELS[level];
-    const pf = L.people * L.people;
-    const sf = L.props * L.props;
-    for (const o of people) hide(o, _p.setFromMatrixPosition(o.matrixWorld).distanceToSquared(headWorld) > pf);
-    for (const o of props) {
-      const bs = o.geometry.boundingSphere;
-      hide(o, _p.copy(bs.center).applyMatrix4(o.matrixWorld).distanceToSquared(headWorld) > sf);
+    for (const u of units) {
+      const d = L[u.person ? 'people' : 'props'];
+      const far = _p.copy(u.centre).applyMatrix4(u.root.matrixWorld).distanceToSquared(headWorld) > d * d;
+      if (far === u.far) continue;
+      u.far = far;
+      for (const m of u.meshes) hide(m, far);
     }
   }
   function uncullAll() {
     scene.traverse((o) => { if (o.userData?.vrCulled) { o.layers.mask = o.userData.vrCulled; o.userData.vrCulled = 0; } });
-    people = []; props = []; collectT = 0;
+    for (const u of units) u.far = false;
+    collectT = 0;
   }
   renderer.xr.addEventListener('sessionend', uncullAll);
 
@@ -671,6 +701,7 @@ export function setupVR(F) {
   renderer.xr.addEventListener('sessionstart', () => { level = 0; settleT = 3; goodFor = 0; qT = 0; qFrames = 0; });
 
   let pollT = 0;
+  let menuFps = 0;
   function updateUI(dt) {
     cullFar(dt);
     autoQuality(dt);
@@ -678,7 +709,11 @@ export function setupVR(F) {
     pollT -= dt;
     if (pollT <= 0) {
       pollT = 0.15;
-      if (menuGroup.visible) layoutMenu();
+      // "Jalan-jalan bebas": no panel, unless someone is talking or there's a question or message
+      const wantHud = !menuOpen && (F.patientMode || !!txt('subs') || !!$('toast')?.classList.contains('on') || visible('choice'));
+      if (wantHud && !hudGroup.visible) placeNow = true;
+      hudGroup.visible = wantHud;
+      if (menuGroup.visible) { layoutMenu(); if (fps.value !== menuFps) { menuFps = fps.value; drawMenuHead(); } }
       if (hudGroup.visible) drawHud();
     }
     if (menuGroup.visible) follow(menuGroup, 1.25, 0.05, dt);
@@ -713,5 +748,5 @@ export function setupVR(F) {
   }
 
   console.info('[VR] ready');
-  return { enterVR, rig, menu: menuGroup, hud: hudGroup, get menuOpen() { return menuOpen; } };
+  return { enterVR, rig, menu: menuGroup, hud: hudGroup, get menuOpen() { return menuOpen; }, debug: { collect, get units() { return units; } } };
 }
