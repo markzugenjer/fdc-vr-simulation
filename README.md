@@ -24,6 +24,21 @@ The original page is kept exactly as published, in `original/index.html`. `npm r
 - **On the Quest:** run `npm run quest:connect`, then open `http://localhost:5174` in the Quest Browser and press **Masuk VR**.
 - **Published:** push to `main`. GitHub Actions builds and publishes https://markzugenjer.github.io/fdc-vr-simulation/
 
+## Quest app (.apk)
+
+The APK is a launcher for the published page. That means two things:
+- GitHub Pages must be live before you build.
+- After that, new versions only need a `git push`. You don't rebuild the APK.
+
+It shares the signing key of `../vr-games-1`. The Quest checks `markzugenjer.github.io/.well-known/assetlinks.json`, which `vr-games-1` publishes, so this app's package (`id.co.fdc.vrsimulation`) has to be listed there.
+
+```bash
+npm run apk:setup                         # adds this app to ../vr-games-1/public/.well-known/assetlinks.json
+cd ../vr-games-1 && git add -A && git commit -m "Add FDC Solo VR to assetlinks" && git push && cd -
+npm run apk:build                         # → fdc-solo-vr.apk
+adb install -r fdc-solo-vr.apk            # App Library → Unknown Sources → FDC Solo VR
+```
+
 ## VR controls
 
 | Control | Action |
@@ -35,7 +50,9 @@ The original page is kept exactly as published, in `original/index.html`. `npm r
 | B / Y | Menu: Jadi pasien, Jalan-jalan bebas, ENCJ speed, day/night, exit VR |
 | X | Lihat adegan (jump to the current ENCJ scene) |
 
-The ENCJ step, staff subtitles and the patient-mode answer choices float in front of you. The panel's top-right corner shows the FPS: green at 70 or more, yellow at 55 or more, red below that.
+The ENCJ step, staff subtitles and the patient-mode answer choices float in front of you. The panel's top-right corner shows `FPS now / target`: green when it holds the target, yellow at 80% or more, red below that.
+
+**Refresh rate:** the app asks the Quest for a steady 90 Hz. Change it in the B/Y menu (72 / 90 / 120 Hz); the choice is remembered. 120 Hz only holds in quiet rooms, so in busy spots it drops and stutters. In VR, people more than 12 m away are not drawn (they keep moving), and the mini-map is hidden.
 
 ## Quest performance profile
 

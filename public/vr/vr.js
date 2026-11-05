@@ -118,7 +118,39 @@ export function setupVR(F) {
     });
   }
 
+  // ------------------------------------------------------------------ headset refresh rate
+  // Quest 3 can run at 72, 90 or 120 Hz. A steady rate feels better than a higher one that
+  // keeps dropping, so 90 is the default; the menu lets you switch (remembered on this headset).
+  const HZ_KEY = 'fdc.vr.hz';
+  let targetHz = 90;
+  try { targetHz = Number(localStorage.getItem(HZ_KEY)) || 90; } catch { /* storage blocked */ }
+  const supportedHz = () => {
+    const s = renderer.xr.getSession();
+    return s?.supportedFrameRates ? [...s.supportedFrameRates].map(Math.round).filter((r) => [72, 90, 120].includes(r)) : [];
+  };
+  function applyHz() {
+    const s = renderer.xr.getSession();
+    const list = supportedHz();
+    if (!s?.updateTargetFrameRate || !list.length) return;
+    if (!list.includes(targetHz)) targetHz = list.includes(90) ? 90 : list[0];
+    s.updateTargetFrameRate(targetHz).catch(() => {});
+  }
+  function cycleHz() {
+    const list = supportedHz();
+    if (!list.length) return;
+    targetHz = list[(list.indexOf(targetHz) + 1) % list.length];
+    try { localStorage.setItem(HZ_KEY, String(targetHz)); } catch { /* storage blocked */ }
+    applyHz();
+  }
+
+  const mapEl = $('map');
+  let mapWasHidden = true;
+
   renderer.xr.addEventListener('sessionstart', () => {
+    applyHz();
+    // the 2D mini-map can't be seen in VR but would still be redrawn every frame
+    mapWasHidden = !mapEl || mapEl.classList.contains('hide');
+    mapEl?.classList.add('hide');
     scene.add(rig, ui);
     rig.add(camera);
     turn = player.yaw;
@@ -138,6 +170,7 @@ export function setupVR(F) {
     joy.x = joy.y = 0;
     keys.ShiftLeft = false;
     if (shadowWas && !renderer.shadowMap.enabled) { renderer.shadowMap.enabled = true; refreshMaterials(); }
+    if (!mapWasHidden) mapEl?.classList.remove('hide');
     floatBtn.hidden = false;
     window.dispatchEvent(new Event('resize'));
   });
@@ -302,7 +335,8 @@ export function setupVR(F) {
 
   // Readers for the original page's HTML panels
   const txt = (id) => ($(id)?.textContent || '').trim().replace(/\s+/g, ' ');
-  const visible = (id) => { const e = $(id); return !!e && !e.classList.contains('hide') && e.offsetParent !== null; };
+  // (offsetParent is always null for position:fixed panels like #choice, so check the style instead)
+  const visible = (id) => { const e = $(id); return !!e && !e.classList.contains('hide') && getComputedStyle(e).display !== 'none'; };
   const overlayVisible = () => { const o = $('overlay'); return !!o && !o.classList.contains('hide'); };
   const choiceLabel = (i) => {
     const bt = $('choiceOpts')?.querySelectorAll('button')[i];
@@ -355,8 +389,8 @@ export function setupVR(F) {
     if (data.fps) {
       ctx.font = `700 24px ${FONT}`;
       ctx.textAlign = 'right';
-      ctx.fillStyle = data.fps >= 70 ? '#9be37a' : data.fps >= 55 ? '#f2d26b' : '#f28b7a';
-      ctx.fillText(`FPS ${data.fps}`, W - pad, y);
+      ctx.fillStyle = data.fps >= targetHz * 0.95 ? '#9be37a' : data.fps >= targetHz * 0.8 ? '#f2d26b' : '#f28b7a';
+      ctx.fillText(`FPS ${data.fps} / ${targetHz}`, W - pad, y);
       ctx.textAlign = 'left';
     }
     ctx.font = `600 30px ${FONT}`;
@@ -415,6 +449,7 @@ export function setupVR(F) {
     ['Lihat adegan ENCJ', () => { $('encjGo')?.click(); closeMenu(); }, 'light'],
     [() => txt('encjSpeed') || 'Kecepatan', () => $('encjSpeed')?.click(), 'light'],
     ['Siang / malam', () => window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyN', key: 'n' })), 'light'],
+    [() => (supportedHz().length > 1 ? `Refresh rate: ${targetHz} Hz` : ''), cycleHz, 'light'],
     ['Keluar dari VR', () => session?.end(), 'light'],
   ].map(([label, fn, tone]) => {
     const get = typeof label === 'function' ? label : () => label;
@@ -487,8 +522,32 @@ export function setupVR(F) {
     group.lookAt(headWorld.x, group.position.y, headWorld.z);
   }
 
+  // People further than FAR metres are skipped when drawing (they keep moving; only the drawing stops).
+  // Uses a render layer the camera doesn't see, so it never fights the simulation's own show/hide.
+  const FAR = 12;
+  const HIDDEN_LAYER = 5;
+  let cullT = 0;
+  const _p = new THREE.Vector3();
+  function cullFarPeople(dt) {
+    cullT -= dt;
+    if (cullT > 0) return;
+    cullT = 0.3;
+    camera.getWorldPosition(headWorld);
+    scene.traverse((o) => {
+      if (!o.isSkinnedMesh) return;
+      const far = o.getWorldPosition(_p).distanceTo(headWorld) > FAR;
+      if (far && !o.userData.vrCulled) { o.userData.vrCulled = o.layers.mask; o.layers.set(HIDDEN_LAYER); }
+      else if (!far && o.userData.vrCulled) { o.layers.mask = o.userData.vrCulled; o.userData.vrCulled = 0; }
+    });
+  }
+  function uncullAll() {
+    scene.traverse((o) => { if (o.userData?.vrCulled) { o.layers.mask = o.userData.vrCulled; o.userData.vrCulled = 0; } });
+  }
+  renderer.xr.addEventListener('sessionend', uncullAll);
+
   let pollT = 0;
   function updateUI(dt) {
+    cullFarPeople(dt);
     if (overlayVisible() && !menuOpen) { menuOpen = true; showPanels(); }
     pollT -= dt;
     if (pollT <= 0) {

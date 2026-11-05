@@ -33,7 +33,18 @@ const EDITS = [
     find: 'renderer.shadowMap.type = THREE.PCFSoftShadowMap;',
     replace: `renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.xr.enabled = true; renderer.xr.setReferenceSpaceType('local-floor'); renderer.xr.setFoveation(1); // [VR]
-if (${Q}) renderer.xr.setFramebufferScaleFactor(0.85); // [Quest] 85% VR resolution`,
+if (${Q}) renderer.xr.setFramebufferScaleFactor(0.85); // [Quest] 85% VR resolution
+const _vrCamW = new THREE.Vector3(); // [VR] camera position in the clinic (in VR the camera sits inside a rig)`,
+  },
+  {
+    why: 'people, speech bubbles and signs use the real head position in VR',
+    find: 'tickPeople(playing || !patientMode ? dt : 0, camera.position);',
+    replace: 'tickPeople(playing || !patientMode ? dt : 0, renderer.xr.isPresenting ? camera.getWorldPosition(_vrCamW) : camera.position);',
+  },
+  {
+    why: 'smaller speech bubbles in VR (desktop sizes them for a flat screen)',
+    find: 'const d = camPos.distanceTo(a.bubble.position), sc = Math.max(1.0, Math.min(2.4, d * 0.3));',
+    replace: 'const d = camPos.distanceTo(a.bubble.position), sc = renderer.xr.isPresenting ? Math.max(0.4, Math.min(1.0, d * 0.15)) : Math.max(1.0, Math.min(2.4, d * 0.3));',
   },
   {
     why: '[Quest] render at 1x pixel ratio',
