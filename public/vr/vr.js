@@ -395,14 +395,15 @@ export function setupVR(F) {
   function drawHud() {
     const toastOn = $('toast')?.classList.contains('on');
     const choiceOn = visible('choice');
+    const steps = F.patientMode; // the ENCJ stepper only in "Jadi pasien", not in "Jalan-jalan bebas"
     const data = {
       room: txt('room'),
       door: txt('doorHint'),
-      phase: txt('encjPhase'),
-      num: txt('encjNum'),
-      act: txt('encjAct'),
-      cust: txt('encjCust'),
-      chips: [...($('encjChips')?.children || [])].map((c) => c.textContent.trim()).filter(Boolean),
+      phase: steps ? txt('encjPhase') : '',
+      num: steps ? txt('encjNum') : '',
+      act: steps ? txt('encjAct') : '',
+      cust: steps ? txt('encjCust') : '',
+      chips: !steps ? [] : [...($('encjChips')?.children || [])].map((c) => c.textContent.trim()).filter(Boolean),
       subs: txt('subs'),
       toast: toastOn ? txt('toast') : '',
       q: choiceOn ? txt('choiceQ') : '',
@@ -485,6 +486,27 @@ export function setupVR(F) {
   const menuHead = makePanel(0.9, 0.2);
   menuGroup.add(menuHead.mesh);
   const loadingText = () => { const s = $('start'); return s?.disabled ? s.textContent.trim() : ''; };
+  // ------------------------------------------------------------------ back to the FDC VR lobby
+  // When the clinic is opened from the FDC VR lobby (vr-games-1, same site), the menu gets a way back.
+  // Opened on its own (the FDC Solo VR app), nothing changes.
+  const fromLobby = (() => {
+    const q = new URLSearchParams(location.search).get('from') === 'lobby';
+    try { if (q) sessionStorage.setItem('fdc.from', 'lobby'); return sessionStorage.getItem('fdc.from') === 'lobby'; } catch { return q; }
+  })();
+  const LOBBY_URL = location.port === '5174' ? `${location.protocol}//${location.hostname}:5173/?from=clinic` : '/?from=clinic';
+  function backToLobby() {
+    try { sessionStorage.removeItem('fdc.from'); } catch { /* storage blocked */ }
+    location.href = LOBBY_URL; // the lobby page starts VR again by itself in the app
+  }
+  if (fromLobby) {
+    const a = document.createElement('a');
+    a.href = LOBBY_URL;
+    a.textContent = '← Kembali ke Lobby FDC';
+    a.style.cssText = `display:inline-block;margin-top:10px;font:600 13px ${FONT};color:#6f8a3c;text-decoration:none`;
+    a.addEventListener('click', () => { try { sessionStorage.removeItem('fdc.from'); } catch { /* */ } });
+    enterBtn.after(a);
+  }
+
   const menuItems = [
     ['Jadi pasien', () => $('startPatient')?.click(), 'green'],
     ['Jalan-jalan bebas', () => $('start')?.click(), 'green'],
@@ -493,6 +515,7 @@ export function setupVR(F) {
     [() => txt('encjSpeed') || 'Kecepatan', () => $('encjSpeed')?.click(), 'light'],
     ['Siang / malam', () => window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyN', key: 'n' })), 'light'],
     [() => (supportedHz().length > 1 ? `Refresh rate: ${targetHz} Hz` : ''), cycleHz, 'light'],
+    [() => (fromLobby ? 'Kembali ke Lobby FDC' : ''), backToLobby, 'light'],
     ['Keluar dari VR', () => session?.end(), 'light'],
   ].map(([label, fn, tone]) => {
     const get = typeof label === 'function' ? label : () => label;
