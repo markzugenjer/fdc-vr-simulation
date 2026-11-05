@@ -9,6 +9,8 @@
     "build": "node scripts/make-vr.mjs",
     "dev": "node scripts/serve.mjs",
     "quest:connect": "adb reverse tcp:5174 tcp:5174",
+    "apk:setup": "node scripts/apk.mjs setup",
+    "apk:build": "node scripts/apk.mjs build",
     "pages:setup": "node -e \"require('fs').mkdirSync('.github/workflows',{recursive:true});require('fs').copyFileSync('scripts/deploy-pages.yml','.github/workflows/deploy.yml');console.log('Created .github/workflows/deploy.yml')\""
   },
   "dependencies": {
