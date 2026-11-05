@@ -93,6 +93,39 @@ export function setupVR(F) {
     requestAnimationFrame(loop);
   }
 
+  // ------------------------------------------------------------------ crash safety
+  // In VR, one error inside the frame loop used to stop drawing for good (a black screen).
+  // The loop now catches it and keeps going (see make-vr.mjs). The error is shown at the bottom
+  // of the VR panel for 20 s and remembered on the headset, so it can be reported.
+  const ERR_KEY = 'fdc.vr.lastError';
+  let lastError = null;
+  let errCount = 0;
+  function report(e, where) {
+    errCount++;
+    const msg = String(e?.message || e || 'unknown error').slice(0, 140);
+    const at = (e?.stack || '').split('\n').find((l) => l.trim().startsWith('at '))?.trim().slice(0, 160) || '';
+    const text = `${where}: ${msg}${errCount > 1 ? ` (×${errCount})` : ''}`;
+    if (lastError?.text !== text) console.error('[VR]', where, e);
+    lastError = { text, at: performance.now() };
+    try { localStorage.setItem(ERR_KEY, JSON.stringify({ text, where: at, when: new Date().toISOString() })); } catch { /* storage blocked */ }
+  }
+  window.__vrOnError = (e) => report(e, 'Frame');
+  window.addEventListener('error', (ev) => report(ev.error || ev.message, 'Page'));
+  window.addEventListener('unhandledrejection', (ev) => report(ev.reason, 'Async'));
+  try {
+    const prev = JSON.parse(localStorage.getItem(ERR_KEY) || 'null');
+    if (prev) console.warn('[VR] last error on this headset:', prev);
+  } catch { /* storage blocked */ }
+
+  // The Quest can reset the GPU (for example when memory runs low). Reload instead of staying black.
+  const canvas = renderer.domElement;
+  canvas.addEventListener('webglcontextlost', (ev) => {
+    ev.preventDefault();
+    report('graphics reset by the headset', 'GPU');
+    setTimeout(() => location.reload(), 2500); // if it doesn't come back by itself
+  });
+  canvas.addEventListener('webglcontextrestored', () => location.reload());
+
   // ------------------------------------------------------------------ rig + head tracking
   const rig = new THREE.Group();
   rig.name = 'vr-rig';
@@ -159,6 +192,8 @@ export function setupVR(F) {
     // Shadows are the most expensive part of the scene: off in VR keeps the Quest smooth.
     // (On a Quest they are already off from the start, so no shader rebuild hitch here.)
     if (renderer.shadowMap.enabled) { renderer.shadowMap.enabled = false; refreshMaterials(); }
+    // Prepare every material's shader now, so walking into a new room later doesn't stutter.
+    try { renderer.compile(scene, camera); } catch (e) { report(e, 'Warm-up'); }
     floatBtn.hidden = true;
     menuOpen = !overlayVisible();
     showPanels();
@@ -373,6 +408,8 @@ export function setupVR(F) {
       q: choiceOn ? txt('choiceQ') : '',
       n: choiceOn ? $('choiceOpts')?.querySelectorAll('button').length || 0 : 0,
       fps: fps.value,
+      level,
+      err: lastError && performance.now() - lastError.at < 20000 ? lastError.text : '',
     };
     const key = JSON.stringify(data);
     if (key === hudKey) return;
@@ -390,12 +427,12 @@ export function setupVR(F) {
       ctx.font = `700 24px ${FONT}`;
       ctx.textAlign = 'right';
       ctx.fillStyle = data.fps >= targetHz * 0.95 ? '#9be37a' : data.fps >= targetHz * 0.8 ? '#f2d26b' : '#f28b7a';
-      ctx.fillText(`FPS ${data.fps} / ${targetHz}`, W - pad, y);
+      ctx.fillText(`FPS ${data.fps} / ${targetHz}${data.level ? `  ·  L${data.level}` : ''}`, W - pad, y);
       ctx.textAlign = 'left';
     }
     ctx.font = `600 30px ${FONT}`;
     ctx.fillStyle = '#b9d77a';
-    ctx.fillText(data.room + (data.door ? `   ·   ${data.door}` : ''), pad, y, W - pad * 2 - 130);
+    ctx.fillText(data.room + (data.door ? `   ·   ${data.door}` : ''), pad, y, W - pad * 2 - 250);
     y += 52;
     if (data.act) {
       ctx.font = `600 26px ${FONT}`;
@@ -432,6 +469,12 @@ export function setupVR(F) {
       ctx.font = `${data.q ? 700 : 500} 30px ${FONT}`;
       ctx.fillStyle = data.q ? '#ffe9a8' : '#ffffff';
       for (const line of wrap(ctx, said, W - pad * 2).slice(0, 3)) { ctx.fillText(line, pad, y); y += 38; }
+    }
+    if (data.err) {
+      // an error was caught (the app kept running) - shown so it can be photographed and reported
+      ctx.font = `600 22px ${FONT}`;
+      ctx.fillStyle = '#f28b7a';
+      ctx.fillText(`⚠ ${data.err}`, pad, H - pad, W - pad * 2);
     }
     hud.tex.needsUpdate = true;
     choiceBtns.forEach((b, i) => { b.mesh.visible = i < data.n; b.draw(); });
@@ -522,32 +565,92 @@ export function setupVR(F) {
     group.lookAt(headWorld.x, group.position.y, headWorld.z);
   }
 
-  // People further than FAR metres are skipped when drawing (they keep moving; only the drawing stops).
-  // Uses a render layer the camera doesn't see, so it never fights the simulation's own show/hide.
-  const FAR = 12;
+  // ------------------------------------------------------------------ distance culling + auto quality
+  // Far people and small far props (plants, chairs, bottles...) are skipped when drawing. They keep
+  // moving; only the drawing stops. Uses a render layer the camera doesn't see, so it never fights
+  // the simulation's own show/hide.
+  // The distances shrink automatically when the headset can't hold its refresh rate, and grow
+  // back when it has room again. Level 0 = full detail.
+  const LEVELS = [
+    { people: 14, props: 26 },
+    { people: 10, props: 18 },
+    { people: 7, props: 12 },
+    { people: 5, props: 8 },
+  ];
+  let level = 0;
   const HIDDEN_LAYER = 5;
-  let cullT = 0;
+  let people = [];
+  let props = [];
   const _p = new THREE.Vector3();
-  function cullFarPeople(dt) {
-    cullT -= dt;
-    if (cullT > 0) return;
-    cullT = 0.3;
-    camera.getWorldPosition(headWorld);
+  const _s = new THREE.Vector3();
+  function collect() {
+    people = [];
+    props = [];
     scene.traverse((o) => {
-      if (!o.isSkinnedMesh) return;
-      const far = o.getWorldPosition(_p).distanceTo(headWorld) > FAR;
-      if (far && !o.userData.vrCulled) { o.userData.vrCulled = o.layers.mask; o.layers.set(HIDDEN_LAYER); }
-      else if (!far && o.userData.vrCulled) { o.layers.mask = o.userData.vrCulled; o.userData.vrCulled = 0; }
+      if (!o.isMesh) return;
+      if (o.isSkinnedMesh) { people.push(o); return; }
+      if (o.isInstancedMesh) return;
+      const g = o.geometry;
+      if (!g) return;
+      if (!g.boundingSphere) g.computeBoundingSphere();
+      o.getWorldScale(_s);
+      const r = g.boundingSphere.radius * Math.max(_s.x, _s.y, _s.z);
+      if (r > 0 && r < 1.2) props.push(o); // small things only: walls and floors always stay
     });
+    // the VR panels, buttons and controllers are never culled
+    const mine = new Set();
+    rig.traverse((o) => mine.add(o));
+    ui.traverse((o) => mine.add(o));
+    props = props.filter((o) => !mine.has(o));
+  }
+  function hide(o, far) {
+    if (far && !o.userData.vrCulled) { o.userData.vrCulled = o.layers.mask; o.layers.set(HIDDEN_LAYER); }
+    else if (!far && o.userData.vrCulled) { o.layers.mask = o.userData.vrCulled; o.userData.vrCulled = 0; }
+  }
+  let cullT = 0;
+  let collectT = 0;
+  function cullFar(dt) {
+    cullT -= dt;
+    collectT -= dt;
+    if (cullT > 0) return;
+    cullT = 0.25;
+    if (collectT <= 0) { collectT = 5; collect(); } // people and props can be added while you play
+    camera.getWorldPosition(headWorld);
+    const L = LEVELS[level];
+    const pf = L.people * L.people;
+    const sf = L.props * L.props;
+    for (const o of people) hide(o, _p.setFromMatrixPosition(o.matrixWorld).distanceToSquared(headWorld) > pf);
+    for (const o of props) {
+      const bs = o.geometry.boundingSphere;
+      hide(o, _p.copy(bs.center).applyMatrix4(o.matrixWorld).distanceToSquared(headWorld) > sf);
+    }
   }
   function uncullAll() {
     scene.traverse((o) => { if (o.userData?.vrCulled) { o.layers.mask = o.userData.vrCulled; o.userData.vrCulled = 0; } });
+    people = []; props = []; collectT = 0;
   }
   renderer.xr.addEventListener('sessionend', uncullAll);
 
+  // Auto quality: every 2 s compare the frame rate with the target.
+  let qT = 0, qFrames = 0, goodFor = 0, settleT = 3; // ignore the first 3 s (loading, shader warm-up)
+  function autoQuality(dt) {
+    qT += dt; qFrames++;
+    if (qT < 2) return;
+    const avg = qFrames / qT;
+    qT = 0; qFrames = 0;
+    if (settleT > 0) { settleT -= 2; return; }
+    if (avg < targetHz * 0.9 && level < LEVELS.length - 1) { level++; goodFor = 0; cullT = 0; }
+    else if (avg >= targetHz * 0.97) {
+      goodFor += 2;
+      if (goodFor >= 10 && level > 0) { level--; goodFor = 0; cullT = 0; } // 10 s steady → a bit more detail
+    } else goodFor = 0;
+  }
+  renderer.xr.addEventListener('sessionstart', () => { level = 0; settleT = 3; goodFor = 0; qT = 0; qFrames = 0; });
+
   let pollT = 0;
   function updateUI(dt) {
-    cullFarPeople(dt);
+    cullFar(dt);
+    autoQuality(dt);
     if (overlayVisible() && !menuOpen) { menuOpen = true; showPanels(); }
     pollT -= dt;
     if (pollT <= 0) {

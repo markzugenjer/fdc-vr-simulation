@@ -44,7 +44,7 @@ const _vrCamW = new THREE.Vector3(); // [VR] camera position in the clinic (in V
   {
     why: 'smaller speech bubbles in VR (desktop sizes them for a flat screen)',
     find: 'const d = camPos.distanceTo(a.bubble.position), sc = Math.max(1.0, Math.min(2.4, d * 0.3));',
-    replace: 'const d = camPos.distanceTo(a.bubble.position), sc = renderer.xr.isPresenting ? Math.max(0.4, Math.min(1.0, d * 0.15)) : Math.max(1.0, Math.min(2.4, d * 0.3));',
+    replace: 'const d = camPos.distanceTo(a.bubble.position), sc = renderer.xr.isPresenting ? Math.max(0.55, Math.min(1.35, d * 0.2)) : Math.max(1.0, Math.min(2.4, d * 0.3));',
   },
   {
     why: '[Quest] render at 1x pixel ratio',
@@ -108,9 +108,9 @@ const _vrCamW = new THREE.Vector3(); // [VR] camera position in the clinic (in V
     replace: `  const ref = ${Q} ? new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: 0xc9d2d4, metalness: 0.9, roughness: 0.12 })) : new Reflector(geo, {`,
   },
   {
-    why: 'drive the loop with setAnimationLoop (requestAnimationFrame stops inside VR)',
+    why: 'drive the loop with setAnimationLoop (requestAnimationFrame stops inside VR), and survive errors',
     find: '  requestAnimationFrame(frame);\n}\nlet last = performance.now();',
-    replace: '  renderer.setAnimationLoop(frame); // [VR]\n}\nlet last = performance.now();',
+    replace: '  renderer.setAnimationLoop((t, f) => { try { frame(t, f); } catch (e) { window.__vrOnError?.(e); try { renderer.render(scene, camera); } catch {} } }); // [VR] an error must not stop drawing (black screen in VR)\n}\nlet last = performance.now();',
   },
   {
     why: 'read the controllers before each simulation step',

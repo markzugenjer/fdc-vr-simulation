@@ -52,7 +52,11 @@ adb install -r fdc-solo-vr.apk            # App Library → Unknown Sources → 
 
 The ENCJ step, staff subtitles and the patient-mode answer choices float in front of you. The panel's top-right corner shows `FPS now / target`: green when it holds the target, yellow at 80% or more, red below that.
 
-**Refresh rate:** the app asks the Quest for a steady 90 Hz. Change it in the B/Y menu (72 / 90 / 120 Hz); the choice is remembered. 120 Hz only holds in quiet rooms, so in busy spots it drops and stutters. In VR, people more than 12 m away are not drawn (they keep moving), and the mini-map is hidden.
+**Refresh rate:** the app asks the Quest for a steady 90 Hz. Change it in the B/Y menu (72 / 90 / 120 Hz); the choice is remembered. 120 Hz only holds in quiet rooms, so in busy spots it drops and stutters. In VR the mini-map is hidden, and far people and small far props are not drawn (they keep moving).
+
+**Auto quality:** every 2 s the app checks whether it keeps up with the target. If not, it draws less of what is far away (levels L1 to L3, shown next to the FPS). After 10 s of steady frames it goes back up.
+
+**Crashes:** an error inside the frame loop no longer stops the drawing (that was a black screen). It is shown at the bottom of the VR panel for 20 s, starting with ⚠, and saved on the headset. If the headset resets the graphics, the page reloads by itself.
 
 ## Quest performance profile
 
