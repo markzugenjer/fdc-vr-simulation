@@ -47,6 +47,11 @@ const _vrCamW = new THREE.Vector3(); // [VR] camera position in the clinic (in V
     replace: 'const d = camPos.distanceTo(a.bubble.position), sc = renderer.xr.isPresenting ? Math.max(0.55, Math.min(1.35, d * 0.2)) : Math.max(1.0, Math.min(2.4, d * 0.3));',
   },
   {
+    why: 'speech bubbles sit just above the head in VR (desktop floats them higher)',
+    find: 'a.bubble.position.set(a.x, a.y + top, a.z);',
+    replace: 'a.bubble.position.set(a.x, a.y + (renderer.xr.isPresenting ? top - 0.3 : top), a.z); a.bubble.center.y = renderer.xr.isPresenting ? 0 : 0.5;',
+  },
+  {
     why: '[Quest] render at 1x pixel ratio',
     find: 'renderer.setPixelRatio(Math.min(devicePixelRatio, isTouch ? 1.5 : 1.75));',
     replace: `renderer.setPixelRatio(${Q} ? 1 : Math.min(devicePixelRatio, isTouch ? 1.5 : 1.75));`,
