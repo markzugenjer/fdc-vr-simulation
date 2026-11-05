@@ -23,12 +23,78 @@ if (!fs.existsSync(SRC)) {
 }
 let html = fs.readFileSync(SRC, 'utf8');
 
+// window.__questPerf is true on a Meta Quest (or with ?quest in the address, to try it on a computer).
+// It switches the page to a lighter profile: fewer lights, no shadows, no post-processing, plain mirrors.
+const Q = 'window.__questPerf';
+
 const EDITS = [
   {
     why: 'enable WebXR on the renderer',
     find: 'renderer.shadowMap.type = THREE.PCFSoftShadowMap;',
     replace: `renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-renderer.xr.enabled = true; renderer.xr.setReferenceSpaceType('local-floor'); renderer.xr.setFoveation(1); // [VR]`,
+renderer.xr.enabled = true; renderer.xr.setReferenceSpaceType('local-floor'); renderer.xr.setFoveation(1); // [VR]
+if (${Q}) renderer.xr.setFramebufferScaleFactor(0.85); // [Quest] 85% VR resolution`,
+  },
+  {
+    why: '[Quest] render at 1x pixel ratio',
+    find: 'renderer.setPixelRatio(Math.min(devicePixelRatio, isTouch ? 1.5 : 1.75));',
+    replace: `renderer.setPixelRatio(${Q} ? 1 : Math.min(devicePixelRatio, isTouch ? 1.5 : 1.75));`,
+  },
+  {
+    why: '[Quest] no shadow maps',
+    find: 'renderer.shadowMap.enabled = true;',
+    replace: `renderer.shadowMap.enabled = !${Q};`,
+  },
+  {
+    why: '[Quest] sun casts no shadow',
+    find: 'sun.castShadow = true;',
+    replace: `sun.castShadow = !${Q};`,
+  },
+  {
+    why: '[Quest] lighter texture filtering',
+    find: 'const ANISO = Math.min(8,',
+    replace: `const ANISO = Math.min(${Q} ? 4 : 8,`,
+  },
+  {
+    why: '[Quest] 4 moving room lights instead of 12',
+    find: 'const POOL = isTouch ? 6 : 12;',
+    replace: `const POOL = ${Q} ? 4 : isTouch ? 6 : 12;`,
+  },
+  {
+    why: '[Quest] brighter ambient light to make up for fewer lamps',
+    find: 'const hemi = new THREE.HemisphereLight(0xfff4e6, 0x7a6a55, 0.18);',
+    replace: `const hemi = new THREE.HemisphereLight(0xfff4e6, 0x7a6a55, ${Q} ? 0.34 : 0.18);`,
+  },
+  {
+    why: '[Quest] start with post-processing off',
+    find: 'let composer, bloom, smaa, ao, grade, quality = isTouch ? 1 : 2;',
+    replace: `let composer, bloom, smaa, ao, grade, quality = ${Q} ? 0 : isTouch ? 1 : 2;`,
+  },
+  {
+    why: '[Quest] load the simplified plant and furniture models',
+    find: "gltf.load(ASSET_BASE + 'models/' + name",
+    replace: `gltf.load(ASSET_BASE + (${Q} ? 'lite/models/' : 'models/') + name`,
+  },
+  {
+    why: '[Quest] load the simplified people',
+    find: "L.load(ASSET_BASE + 'people/' + n + '.glb'",
+    replace: `L.load(ASSET_BASE + (${Q} ? 'lite/people/' : 'people/') + n + '.glb'`,
+  },
+  {
+    why: '[Quest] merge the 129 soft furniture shadows into one draw call',
+    find: '  for (const m of shadowGroup.children) m.scale.set(FS, 1, FS);',
+    replace: `  for (const m of shadowGroup.children) m.scale.set(FS, 1, FS);
+  if (${Q}) { mergeStatic(shadowGroup, shadowGroup); for (const m of shadowGroup.children) m.renderOrder = 1; } // [Quest]`,
+  },
+  {
+    why: '[Quest] only draw people who are in view',
+    find: '    m.frustumCulled = false; m.castShadow = true; m.receiveShadow = true;',
+    replace: `    m.frustumCulled = !!${Q}; m.castShadow = true; m.receiveShadow = true;`,
+  },
+  {
+    why: '[Quest] mirrors become a shiny surface (a live mirror redraws the whole clinic)',
+    find: '  const ref = new Reflector(geo, {',
+    replace: `  const ref = ${Q} ? new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: 0xc9d2d4, metalness: 0.9, roughness: 0.12 })) : new Reflector(geo, {`,
   },
   {
     why: 'drive the loop with setAnimationLoop (requestAnimationFrame stops inside VR)',
@@ -74,6 +140,7 @@ renderer.xr.enabled = true; renderer.xr.setReferenceSpaceType('local-floor'); re
     why: 'app manifest and icons (needed for the Quest app)',
     find: '</head>',
     replace: `<link rel="manifest" href="./manifest.webmanifest"><meta name="theme-color" content="#6f8a3c"><link rel="icon" href="./icons/icon-192.png">
+<script>window.__questPerf = /OculusBrowser|Quest/i.test(navigator.userAgent) || new URLSearchParams(location.search).has('quest');</script>
 </head>`,
   },
 ];
@@ -122,5 +189,13 @@ html = html.replace(importMap, `<script type="importmap">
 </script>`);
 
 fs.writeFileSync(OUT, html);
-console.log(`✔ Built public/index.html with ${EDITS.length} VR edits, libraries in public/vendor/.`);
+
+const { buildLiteModels } = await import('./lite-models.mjs');
+const lite = await buildLiteModels(ROOT);
+if (lite) {
+  const k = (n) => `${Math.round(n / 1000)}k`;
+  console.log(`✔ Quest models in public/assets/lite/: plants & furniture ${k(lite.plants.before)} → ${k(lite.plants.after)} triangles, `
+    + `people ${k(lite.people.before)} → ${k(lite.people.after)} (one of each file).`);
+}
+console.log(`✔ Built public/index.html with ${EDITS.length} VR and Quest edits, libraries in public/vendor/.`);
 console.log('  Try it: npm run dev  →  http://localhost:5174');

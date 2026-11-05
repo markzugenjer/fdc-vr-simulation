@@ -12,6 +12,10 @@
     "pages:setup": "node -e \"require('fs').mkdirSync('.github/workflows',{recursive:true});require('fs').copyFileSync('scripts/deploy-pages.yml','.github/workflows/deploy.yml');console.log('Created .github/workflows/deploy.yml')\""
   },
   "dependencies": {
+    "@gltf-transform/core": "4.1.1",
+    "@gltf-transform/extensions": "4.1.1",
+    "@gltf-transform/functions": "4.1.1",
+    "meshoptimizer": "0.22.0",
     "n8ao": "1.9.4",
     "postprocessing": "6.35.3",
     "three": "0.160.0"

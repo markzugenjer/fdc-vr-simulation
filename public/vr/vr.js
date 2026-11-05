@@ -69,6 +69,30 @@ export function setupVR(F) {
     navigator.xr.addEventListener?.('sessiongranted', enterVR);
   }
 
+  // ------------------------------------------------------------------ FPS counter
+  // Shown in the VR panel, and as a small badge on a Quest or with ?fps in the address.
+  const fps = { value: 0, frames: 0, t: performance.now() };
+  function countFrame() {
+    fps.frames++;
+    const now = performance.now();
+    if (now - fps.t >= 500) {
+      fps.value = Math.round((fps.frames * 1000) / (now - fps.t));
+      fps.frames = 0;
+      fps.t = now;
+      if (badge) badge.textContent = `FPS ${fps.value}`;
+    }
+  }
+  const showBadge = window.__questPerf || new URLSearchParams(location.search).has('fps');
+  let badge = null;
+  if (showBadge) {
+    badge = document.createElement('div');
+    badge.style.cssText = 'position:fixed;top:10px;right:10px;z-index:60;padding:4px 10px;border-radius:8px;'
+      + `background:rgba(20,26,15,.8);color:#b9d77a;font:600 13px ${FONT};pointer-events:none`;
+    document.body.append(badge);
+    const loop = () => { if (!renderer.xr.isPresenting) countFrame(); requestAnimationFrame(loop); };
+    requestAnimationFrame(loop);
+  }
+
   // ------------------------------------------------------------------ rig + head tracking
   const rig = new THREE.Group();
   rig.name = 'vr-rig';
@@ -101,8 +125,8 @@ export function setupVR(F) {
     haveHead = false;
     if (F.plan) F.setPlanXR(0);
     // Shadows are the most expensive part of the scene: off in VR keeps the Quest smooth.
-    renderer.shadowMap.enabled = false;
-    refreshMaterials();
+    // (On a Quest they are already off from the start, so no shader rebuild hitch here.)
+    if (renderer.shadowMap.enabled) { renderer.shadowMap.enabled = false; refreshMaterials(); }
     floatBtn.hidden = true;
     menuOpen = !overlayVisible();
     showPanels();
@@ -113,8 +137,7 @@ export function setupVR(F) {
     scene.remove(rig, ui);
     joy.x = joy.y = 0;
     keys.ShiftLeft = false;
-    renderer.shadowMap.enabled = shadowWas;
-    refreshMaterials();
+    if (shadowWas && !renderer.shadowMap.enabled) { renderer.shadowMap.enabled = true; refreshMaterials(); }
     floatBtn.hidden = false;
     window.dispatchEvent(new Event('resize'));
   });
@@ -122,6 +145,7 @@ export function setupVR(F) {
   /** Runs every frame BEFORE the simulation's tick: read controllers, steer the player. */
   window.__vrPre = (dt) => {
     if (!xrOn()) return;
+    countFrame();
     headLocal.copy(camera.position); // the headset pose three.js wrote at the last render
     headQ.copy(camera.quaternion);
     euler.setFromQuaternion(headQ, 'YXZ');
@@ -314,6 +338,7 @@ export function setupVR(F) {
       toast: toastOn ? txt('toast') : '',
       q: choiceOn ? txt('choiceQ') : '',
       n: choiceOn ? $('choiceOpts')?.querySelectorAll('button').length || 0 : 0,
+      fps: fps.value,
     };
     const key = JSON.stringify(data);
     if (key === hudKey) return;
@@ -327,9 +352,16 @@ export function setupVR(F) {
     ctx.textBaseline = 'alphabetic';
     ctx.textAlign = 'left';
     let y = pad + 28;
+    if (data.fps) {
+      ctx.font = `700 24px ${FONT}`;
+      ctx.textAlign = 'right';
+      ctx.fillStyle = data.fps >= 70 ? '#9be37a' : data.fps >= 55 ? '#f2d26b' : '#f28b7a';
+      ctx.fillText(`FPS ${data.fps}`, W - pad, y);
+      ctx.textAlign = 'left';
+    }
     ctx.font = `600 30px ${FONT}`;
     ctx.fillStyle = '#b9d77a';
-    ctx.fillText(data.room + (data.door ? `   ·   ${data.door}` : ''), pad, y, W - pad * 2);
+    ctx.fillText(data.room + (data.door ? `   ·   ${data.door}` : ''), pad, y, W - pad * 2 - 130);
     y += 52;
     if (data.act) {
       ctx.font = `600 26px ${FONT}`;
